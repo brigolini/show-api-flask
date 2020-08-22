@@ -1,8 +1,7 @@
 from datetime import datetime, timedelta
 
-import jwt
 from flask import Flask, jsonify, request
-from flask_jwt import jwt_required, JWT
+from flask_jwt import JWT, jwt_required
 from werkzeug.security import safe_str_cmp
 
 from data import alchemy
@@ -15,6 +14,33 @@ app.config['PROPAGATE_EXCEPTIONS'] = True
 app.secret_key = 'supersecreto'
 
 
+# Funções necessárias para o JWT
+def authenticate(username,password):
+    auth_user = user.UserModel.find_by_name(username)
+    dict_error = {'erro':'Usuário ou senha inválidos'}
+    if auth_user and safe_str_cmp(auth_user.password.encode('utf-8'),password.encode('utf-8')):
+        return auth_user
+    return auth_user, 401
+
+def identity(payload):
+    user_id = payload['user_name']
+    return user.UserModel.find_by_name(user_id)
+
+jwt = JWT(app,authenticate,identity)
+
+@jwt.jwt_payload_handler
+def make_payload(jwt_identity):
+    expiration = datetime.now() +timedelta(hours=10)
+    nbf = datetime.now() + timedelta(seconds=1)
+    iat = datetime.now()
+    return {
+        'user_id' : jwt_identity.id,
+        'user_name' : jwt_identity.name,
+        'iat':iat,
+        'exp':expiration,
+        'nbf':nbf
+    }
+
 @app.before_first_request
 def create_tables():
     alchemy.create_all()
@@ -25,43 +51,19 @@ def create_tables():
 def home():
     return "API Funcionando", 200
 
-
-def authenticate(username, password):
-    auth_user = user.UserModel.find_by_name(username)
-    if auth_user and safe_str_cmp(auth_user.password.encode('utf-8'), password.encode('utf-8')):
-        return auth_user
-
-
-def identity(payload):
-    user_id = payload['identity']
-    return user.UserModel.find_by_name(user_id)
-
-
-jwt = JWT(app, authenticate, identity)
-
-
-@jwt.jwt_payload_handler
-def make_payload(jwt_identity):
-    expiration = datetime.now() + timedelta(minutes=1)
-    nbf = (datetime.now() + timedelta(seconds=50))
-    return {'user_id': jwt_identity.id,
-            'user_name': jwt_identity.name,
-            'iat':datetime.now(),
-            'exp': expiration,
-            'nbf' : nbf}
-
-
-
-# post /signup data: {username,password}
-@app.route('/signup', methods=['POST'])
+@app.route("/signup",methods=['POST'])
 def signup():
-    request_data = request.get_json()
-    new_user = user.UserModel(name=request_data["username"], password=request_data["password"])
-    new_user.save_to_db()
-
+  request_data = request.get_json()
+  # Caso o email já exista, devolve conflito (status 409)
+  if (user.UserModel.find_by_name(request_data['username'])):
+      return {'message': 'email já encontrado'}, 409
+  new_user = user.UserModel(name=request_data['username'],password=request_data['password'])
+  new_user.save_to_db()
+  return new_user.json()
 
 # post /show data: {name :}
 @app.route('/show', methods=['POST'])
+@jwt_required()
 def create_show():
     request_data = request.get_json()
     new_show = show.ShowModel(request_data['name'])
@@ -72,6 +74,7 @@ def create_show():
 
 # get /show/<name> data: {name :}
 @app.route('/show/<string:name>')
+@jwt_required()
 def get_show(name):
     result = show.ShowModel.find_by_name(name);
     if result:
@@ -81,6 +84,7 @@ def get_show(name):
 
 # post /show/<name> data: {name :}
 @app.route('/show/<string:name>/item', methods=['POST'])
+@jwt_required()
 def create_episode_in_show(name):
     request_data = request.get_json()
     parent = show.ShowModel.find_by_name(name)
@@ -91,17 +95,7 @@ def create_episode_in_show(name):
     else:
         return {'message': 'Não existe a série'}, 404
 
-    # pass
 
-
-#
-# #get /show/<name>/item data: {name :}
-# @app.route('/show/<string:name>/item')
-# def get_item_in_show(name):
-#   for show in shows:
-#     if show['name'] == name:
-#         return jsonify( {'episodes':show['episodes'] } )
-#   return jsonify ({'message':'Série não existe'}),401
 
 if __name__ == '__main__':
     from data import alchemy
